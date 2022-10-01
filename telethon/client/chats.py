@@ -965,6 +965,7 @@ class ChatMethods:
             if is_admin is None:
                 is_admin = any(locals()[x] for x in perm_names)
 
+            entity = entity.chat_id
             return await self(functions.messages.EditChatAdminRequest(
                 entity, user, is_admin=is_admin))
 
