@@ -967,7 +967,7 @@ class ChatMethods:
 
             entity = entity.chat_id
             return await self(functions.messages.EditChatAdminRequest(
-                entity, user, is_admin=is_admin))
+                entity.chat_id, user, is_admin=is_admin))
 
         else:
             raise ValueError(

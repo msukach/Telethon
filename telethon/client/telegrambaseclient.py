@@ -591,6 +591,12 @@ class TelegramBaseClient(abc.ABC):
         coroutine that you should await on your own code; otherwise
         the loop is ran until said coroutine completes.
 
+        Event handlers which are currently running will be cancelled before
+        this function returns (in order to properly clean-up their tasks).
+        In particular, this means that using ``disconnect`` in a handler
+        will cause code after the ``disconnect`` to never run. If this is
+        needed, consider spawning a separate task to do the remaining work.
+
         Example
             .. code-block:: python
 
@@ -598,7 +604,11 @@ class TelegramBaseClient(abc.ABC):
                 await client.disconnect()
         """
         if self.loop.is_running():
-            return self._disconnect_coro()
+            # Disconnect may be called from an event handler, which would
+            # cancel itself during itself and never actually complete the
+            # disconnection. Shield the task to prevent disconnect itself
+            # from being cancelled. See issue #3942 for more details.
+            return asyncio.shield(self.loop.create_task(self._disconnect_coro()))
         else:
             try:
                 self.loop.run_until_complete(self._disconnect_coro())

@@ -13,6 +13,8 @@ from .. import events, utils, errors
 from ..events.common import EventBuilder, EventCommon
 from ..tl import types, functions
 from .._updates import GapError, PrematureEndReason
+from ..helpers import get_running_loop
+
 
 if typing.TYPE_CHECKING:
     from .telegramclient import TelegramClient
@@ -275,7 +277,7 @@ class UpdateMethods:
 
                 get_diff = self._message_box.get_difference()
                 if get_diff:
-                    self._log[__name__].info('Getting difference for account updates')
+                    self._log[__name__].debug('Getting difference for account updates')
                     try:
                         diff = await self(get_diff)
                     except (errors.ServerError, ValueError) as e:
@@ -288,13 +290,23 @@ class UpdateMethods:
                         self._log[__name__].info('Cannot get difference since the account is not logged in: %s', type(e).__name__)
                         self._message_box.end_difference()
                         continue
+                    except OSError as e:
+                        # Network is likely down, but it's unclear for how long.
+                        # If disconnect is called this task will be cancelled along with the sleep.
+                        # If disconnect is not called, getting difference should be retried after a few seconds.
+                        self._log[__name__].info('Cannot get difference since the network is down: %s: %s', type(e).__name__, e)
+                        await asyncio.sleep(5)
+                        continue
                     updates, users, chats = self._message_box.apply_difference(diff, self._mb_entity_cache)
+                    if updates:
+                        self._log[__name__].info('Got difference for account updates')
+
                     updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
                     continue
 
                 get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
                 if get_diff:
-                    self._log[__name__].info('Getting difference for channel %s updates', get_diff.channel.channel_id)
+                    self._log[__name__].debug('Getting difference for channel %s updates', get_diff.channel.channel_id)
                     try:
                         diff = await self(get_diff)
                     except (
@@ -346,19 +358,29 @@ class UpdateMethods:
                             self._mb_entity_cache
                         )
                         continue
+                    except OSError as e:
+                        self._log[__name__].info(
+                            'Cannot get difference for channel %d since the network is down: %s: %s',
+                            get_diff.channel.channel_id, type(e).__name__, e
+                        )
+                        await asyncio.sleep(5)
+                        continue
 
                     updates, users, chats = self._message_box.apply_channel_difference(get_diff, diff, self._mb_entity_cache)
+                    if updates:
+                        self._log[__name__].info('Got difference for channel %d updates', get_diff.channel.channel_id)
+
                     updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
                     continue
 
                 deadline = self._message_box.check_deadlines()
-                deadline_delay = deadline - asyncio.get_running_loop().time()
+                deadline_delay = deadline - get_running_loop().time()
                 if deadline_delay > 0:
                     # Don't bother sleeping and timing out if the delay is already 0 (pollutes the logs).
                     try:
                         updates = await asyncio.wait_for(self._updates_queue.get(), deadline_delay)
                     except asyncio.TimeoutError:
-                        self._log[__name__].info('Timeout waiting for updates expired')
+                        self._log[__name__].debug('Timeout waiting for updates expired')
                         continue
                 else:
                     continue
